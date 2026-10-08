@@ -1,4 +1,4 @@
-# FinFlow — Distributed Payment Platform
+# Distributed Payment System
 
 A production-grade distributed payment platform simulating a real-world fintech backend. Built with Java 21, Spring Boot 3, Kafka, PostgreSQL, and Redis using microservices, event-driven architecture, and distributed systems patterns.
 
