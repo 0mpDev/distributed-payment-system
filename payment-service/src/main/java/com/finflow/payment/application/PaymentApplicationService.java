@@ -65,7 +65,12 @@ public class PaymentApplicationService {
 
         switch (event.decision()) {
             case APPROVED -> {
-                walletClient.settle(payment.getId(), payment.getPayerId(), payment.getAmount());
+                walletClient.settle(
+                        payment.getId(),
+                        payment.getPayerId(),
+                        payment.getPayeeId(),
+                        payment.getAmount()
+                );
                 payment.approve();
                 paymentRepository.save(payment);
                 enqueue(payment.getId(), "payment.approved", "payment-approved",
