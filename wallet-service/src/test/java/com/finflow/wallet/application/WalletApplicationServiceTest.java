@@ -8,6 +8,8 @@ import com.finflow.wallet.domain.exception.WalletNotFoundException;
 import com.finflow.wallet.domain.wallet.Wallet;
 import com.finflow.wallet.domain.wallet.WalletEntryRepository;
 import com.finflow.wallet.domain.wallet.WalletRepository;
+import com.finflow.wallet.application.command.SettlePaymentCommand;
+
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -89,4 +91,56 @@ class WalletApplicationServiceTest {
                 walletService.reserve(new ReserveBalanceCommand(UUID.randomUUID(), userId, BigDecimal.ONE, "BRL"))
         ).isInstanceOf(WalletNotFoundException.class);
     }
+
+
+    @Test
+    void settle_WithSamePayerAndPayee_ThrowsIllegalArgumentException() {
+        UUID walletId = UUID.randomUUID();
+
+        var command = new SettlePaymentCommand(
+                UUID.randomUUID(),
+                walletId,
+                walletId,
+                new BigDecimal("100.00")
+        );
+
+        assertThatThrownBy(() -> walletService.settle(command))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Payer and payee must be different users");
+
+        verifyNoInteractions(walletRepository);
+    }
+
+    @Test
+    void settle_WithZeroAmount_ThrowsIllegalArgumentException() {
+        var command = new SettlePaymentCommand(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                BigDecimal.ZERO
+        );
+
+        assertThatThrownBy(() -> walletService.settle(command))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Settlement amount must be positive");
+
+        verifyNoInteractions(walletRepository);
+    }
+
+    @Test
+    void settle_WithNegativeAmount_ThrowsIllegalArgumentException() {
+        var command = new SettlePaymentCommand(
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                UUID.randomUUID(),
+                new BigDecimal("-10.00")
+        );
+
+        assertThatThrownBy(() -> walletService.settle(command))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Settlement amount must be positive");
+
+        verifyNoInteractions(walletRepository);
+    }
+
 }
