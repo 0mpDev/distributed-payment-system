@@ -63,10 +63,21 @@ public class Wallet {
         this.updatedAt = Instant.now();
     }
 
+    public void credit(BigDecimal amount) {
+        if (amount == null || amount.signum() <= 0) {
+            throw new IllegalArgumentException("Credit amount must be positive");
+        }
+
+        this.balance = this.balance.add(amount);
+        this.updatedAt = Instant.now();
+    }
+
     public void release(BigDecimal amount) {
         this.reservedBalance = this.reservedBalance.subtract(amount);
         this.updatedAt = Instant.now();
     }
+
+
 
     public BigDecimal getAvailableBalance() {
         return balance.subtract(reservedBalance);

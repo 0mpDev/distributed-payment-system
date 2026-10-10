@@ -28,12 +28,17 @@ public class InternalWalletController {
                 request.paymentId(), request.userId(), request.amount(), request.currency()));
     }
 
+
     @PostMapping("/settle")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void settle(@Valid @RequestBody InternalSettleRequest request) {
         walletService.settle(new SettlePaymentCommand(
-                request.paymentId(), request.userId(), request.amount()));
+                request.paymentId(),
+                request.payerId(),
+                request.payeeId(),
+                request.amount()));
     }
+
 
     @PostMapping("/release")
     @ResponseStatus(HttpStatus.NO_CONTENT)

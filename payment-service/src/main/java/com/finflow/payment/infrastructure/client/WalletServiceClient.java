@@ -40,13 +40,15 @@ public class WalletServiceClient {
                 .toBodilessEntity();
     }
 
-    public void settle(UUID paymentId, UUID userId, BigDecimal amount) {
+
+    public void settle(UUID paymentId, UUID payerId, UUID payeeId, BigDecimal amount) {
         restClient.post()
                 .uri("/internal/wallets/settle")
-                .body(new SettleRequest(paymentId, userId, amount))
+                .body(new SettleRequest(paymentId, payerId, payeeId, amount))
                 .retrieve()
                 .toBodilessEntity();
     }
+
 
     public void release(UUID paymentId, UUID userId, BigDecimal amount) {
         restClient.post()
@@ -57,6 +59,6 @@ public class WalletServiceClient {
     }
 
     record ReserveRequest(UUID paymentId, UUID userId, BigDecimal amount, String currency) {}
-    record SettleRequest(UUID paymentId, UUID userId, BigDecimal amount) {}
+    record SettleRequest(UUID paymentId, UUID payerId, UUID payeeId, BigDecimal amount) {}
     record ReleaseRequest(UUID paymentId, UUID userId, BigDecimal amount) {}
 }
