@@ -16,7 +16,7 @@ spring:
           predicates:
             - Path=/api/payments/**
           filters:
-            - RewritePath=/api/payments(?<segment>/.*)?, /$\{segment}
+            - RewritePath=/api/payments(?<segment>/.*)?, /payments$\{segment}
 
         - id: wallet-service
           uri: ${WALLET_SERVICE_URL:http://localhost:8083}
