@@ -1,6 +1,8 @@
 
 package com.finflow.wallet.application;
 
+import com.finflow.wallet.application.command.ReserveBalanceCommand;
+import com.finflow.wallet.application.command.ReleaseReservationCommand;
 import com.finflow.wallet.WalletServiceApplication;
 import com.finflow.wallet.application.command.SettlePaymentCommand;
 import org.junit.jupiter.api.Test;
@@ -226,6 +228,189 @@ class WalletSettlementIntegrationTest {
                     .isNull();
         }
     }
+
+    @Test
+    void reserve_WhenCalledConcurrentlyForSamePayment_ReservesMoneyOnlyOnce()
+            throws Exception {
+
+        UUID userId = UUID.randomUUID();
+        UUID paymentId = UUID.randomUUID();
+        UUID walletId = UUID.randomUUID();
+
+        insertWallet(walletId, userId, "500.00");
+
+        ReserveBalanceCommand command = new ReserveBalanceCommand(
+                paymentId,
+                userId,
+                new BigDecimal("100.00"),
+                "BRL"
+        );
+
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+
+        try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+            Future<Throwable> first = executor.submit(() -> {
+                ready.countDown();
+                try {
+                    if (!start.await(10, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("Timed out waiting to start");
+                    }
+                    walletService.reserve(command);
+                    return null;
+                } catch (Throwable error) {
+                    return error;
+                }
+            });
+
+            Future<Throwable> second = executor.submit(() -> {
+                ready.countDown();
+                try {
+                    if (!start.await(10, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("Timed out waiting to start");
+                    }
+                    walletService.reserve(command);
+                    return null;
+                } catch (Throwable error) {
+                    return error;
+                }
+            });
+
+            assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+
+            Throwable firstError = first.get(30, TimeUnit.SECONDS);
+            Throwable secondError = second.get(30, TimeUnit.SECONDS);
+
+            BigDecimal balance = jdbcTemplate.queryForObject(
+                    "SELECT balance FROM wallet.wallets WHERE id = ?",
+                    BigDecimal.class,
+                    walletId
+            );
+
+            BigDecimal reservedBalance = jdbcTemplate.queryForObject(
+                    "SELECT reserved_balance FROM wallet.wallets WHERE id = ?",
+                    BigDecimal.class,
+                    walletId
+            );
+
+            Integer reservationCount = jdbcTemplate.queryForObject(
+                    """
+                    SELECT COUNT(*) FROM wallet.wallet_entries
+                    WHERE payment_id = ? AND type = 'RESERVATION'
+                    """,
+                    Integer.class,
+                    paymentId
+            );
+
+            assertThat(balance).isEqualByComparingTo("500.00");
+            assertThat(reservedBalance).isEqualByComparingTo("100.00");
+            assertThat(reservationCount).isEqualTo(1);
+            assertThat(firstError).as("First reservation").isNull();
+            assertThat(secondError).as("Duplicate reservation").isNull();
+        }
+    }
+
+    @Test
+    void release_WhenCalledConcurrentlyForSamePayment_ReleasesMoneyOnlyOnce()
+            throws Exception {
+
+        UUID userId = UUID.randomUUID();
+        UUID paymentId = UUID.randomUUID();
+        UUID walletId = UUID.randomUUID();
+
+        insertWallet(walletId, userId, "500.00");
+
+        // Set up funds reserved by this payment.
+        jdbcTemplate.update(
+                "UPDATE wallet.wallets SET reserved_balance = ? WHERE id = ?",
+                new BigDecimal("100.00"),
+                walletId
+        );
+
+        jdbcTemplate.update(
+                """
+                INSERT INTO wallet.wallet_entries
+                    (id, wallet_id, payment_id, type, amount, created_at)
+                VALUES (?, ?, ?, 'RESERVATION', ?, CURRENT_TIMESTAMP)
+                """,
+                UUID.randomUUID(),
+                walletId,
+                paymentId,
+                new BigDecimal("100.00")
+        );
+
+        ReleaseReservationCommand command = new ReleaseReservationCommand(
+                paymentId,
+                userId,
+                new BigDecimal("100.00")
+        );
+
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+
+        try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+            Future<Throwable> first = executor.submit(() -> {
+                ready.countDown();
+                try {
+                    if (!start.await(10, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("Timed out waiting to start");
+                    }
+                    walletService.release(command);
+                    return null;
+                } catch (Throwable error) {
+                    return error;
+                }
+            });
+
+            Future<Throwable> second = executor.submit(() -> {
+                ready.countDown();
+                try {
+                    if (!start.await(10, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("Timed out waiting to start");
+                    }
+                    walletService.release(command);
+                    return null;
+                } catch (Throwable error) {
+                    return error;
+                }
+            });
+
+            assertThat(ready.await(10, TimeUnit.SECONDS)).isTrue();
+            start.countDown();
+
+            Throwable firstError = first.get(30, TimeUnit.SECONDS);
+            Throwable secondError = second.get(30, TimeUnit.SECONDS);
+
+            BigDecimal balance = jdbcTemplate.queryForObject(
+                    "SELECT balance FROM wallet.wallets WHERE id = ?",
+                    BigDecimal.class,
+                    walletId
+            );
+
+            BigDecimal reservedBalance = jdbcTemplate.queryForObject(
+                    "SELECT reserved_balance FROM wallet.wallets WHERE id = ?",
+                    BigDecimal.class,
+                    walletId
+            );
+
+            Integer releaseCount = jdbcTemplate.queryForObject(
+                    """
+                    SELECT COUNT(*) FROM wallet.wallet_entries
+                    WHERE payment_id = ? AND type = 'RELEASE'
+                    """,
+                    Integer.class,
+                    paymentId
+            );
+
+            assertThat(balance).isEqualByComparingTo("500.00");
+            assertThat(reservedBalance).isEqualByComparingTo("0.00");
+            assertThat(releaseCount).isEqualTo(1);
+            assertThat(firstError).as("First release").isNull();
+            assertThat(secondError).as("Duplicate release").isNull();
+        }
+    }
+
 
 
     private void insertWallet(UUID walletId, UUID userId, String balance) {
