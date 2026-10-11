@@ -1,15 +1,16 @@
+
 package com.finflow.wallet.application;
 
 import com.finflow.wallet.application.command.CreateWalletCommand;
 import com.finflow.wallet.application.command.ReserveBalanceCommand;
+import com.finflow.wallet.application.command.SettlePaymentCommand;
 import com.finflow.wallet.domain.exception.InsufficientFundsException;
 import com.finflow.wallet.domain.exception.WalletAlreadyExistsException;
 import com.finflow.wallet.domain.exception.WalletNotFoundException;
+import com.finflow.wallet.domain.wallet.EntryType;
 import com.finflow.wallet.domain.wallet.Wallet;
 import com.finflow.wallet.domain.wallet.WalletEntryRepository;
 import com.finflow.wallet.domain.wallet.WalletRepository;
-import com.finflow.wallet.application.command.SettlePaymentCommand;
-import com.finflow.wallet.domain.wallet.EntryType;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -45,7 +46,9 @@ class WalletApplicationServiceTest {
         when(walletRepository.existsByUserId(userId)).thenReturn(false);
         when(walletRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-        var result = walletService.createWallet(new CreateWalletCommand(userId, new BigDecimal("1000.00"), "BRL"));
+        var result = walletService.createWallet(
+                new CreateWalletCommand(
+                        userId, new BigDecimal("1000.00"), "BRL"));
 
         assertThat(result.getUserId()).isEqualTo(userId);
         assertThat(result.getBalance()).isEqualByComparingTo("1000.00");
@@ -57,18 +60,22 @@ class WalletApplicationServiceTest {
         when(walletRepository.existsByUserId(userId)).thenReturn(true);
 
         assertThatThrownBy(() ->
-                walletService.createWallet(new CreateWalletCommand(userId, BigDecimal.TEN, "BRL"))
+                walletService.createWallet(
+                        new CreateWalletCommand(userId, BigDecimal.TEN, "BRL"))
         ).isInstanceOf(WalletAlreadyExistsException.class);
     }
 
     @Test
     void reserve_WithSufficientBalance_DecreasesAvailableBalance() {
         var wallet = Wallet.create(userId, new BigDecimal("500.00"), "BRL");
-        when(walletRepository.findByUserIdWithLock(userId)).thenReturn(Optional.of(wallet));
+
+        when(walletRepository.findByUserIdWithLock(userId))
+                .thenReturn(Optional.of(wallet));
         when(walletRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(entryRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-        walletService.reserve(new ReserveBalanceCommand(UUID.randomUUID(), userId, new BigDecimal("200.00"), "BRL"));
+        walletService.reserve(new ReserveBalanceCommand(
+                UUID.randomUUID(), userId, new BigDecimal("200.00"), "BRL"));
 
         assertThat(wallet.getAvailableBalance()).isEqualByComparingTo("300.00");
         assertThat(wallet.getReservedBalance()).isEqualByComparingTo("200.00");
@@ -77,22 +84,27 @@ class WalletApplicationServiceTest {
     @Test
     void reserve_WithInsufficientBalance_ThrowsInsufficientFunds() {
         var wallet = Wallet.create(userId, new BigDecimal("100.00"), "BRL");
-        when(walletRepository.findByUserIdWithLock(userId)).thenReturn(Optional.of(wallet));
+
+        when(walletRepository.findByUserIdWithLock(userId))
+                .thenReturn(Optional.of(wallet));
 
         assertThatThrownBy(() ->
-                walletService.reserve(new ReserveBalanceCommand(UUID.randomUUID(), userId, new BigDecimal("500.00"), "BRL"))
+                walletService.reserve(new ReserveBalanceCommand(
+                        UUID.randomUUID(), userId,
+                        new BigDecimal("500.00"), "BRL"))
         ).isInstanceOf(InsufficientFundsException.class);
     }
 
     @Test
     void reserve_ForUnknownUser_ThrowsWalletNotFound() {
-        when(walletRepository.findByUserIdWithLock(userId)).thenReturn(Optional.empty());
+        when(walletRepository.findByUserIdWithLock(userId))
+                .thenReturn(Optional.empty());
 
         assertThatThrownBy(() ->
-                walletService.reserve(new ReserveBalanceCommand(UUID.randomUUID(), userId, BigDecimal.ONE, "BRL"))
+                walletService.reserve(new ReserveBalanceCommand(
+                        UUID.randomUUID(), userId, BigDecimal.ONE, "BRL"))
         ).isInstanceOf(WalletNotFoundException.class);
     }
-
 
     @Test
     void settle_WithSamePayerAndPayee_ThrowsIllegalArgumentException() {
@@ -155,20 +167,24 @@ class WalletApplicationServiceTest {
         var payee = Wallet.create(
                 payeeId, new BigDecimal("50.00"), "BRL");
 
+        // A payment must have reserved funds before settlement.
+        payer.reserve(new BigDecimal("100.00"));
+
         when(entryRepository.existsByPaymentIdAndType(
                 paymentId, EntryType.SETTLEMENT)).thenReturn(false);
         when(entryRepository.existsByPaymentIdAndType(
                 paymentId, EntryType.CREDIT)).thenReturn(false);
 
-        when(walletRepository.findByUserIdWithLock(payerId))
-                .thenReturn(Optional.of(payer));
-        when(walletRepository.findByUserIdWithLock(payeeId))
-                .thenReturn(Optional.of(payee));
+        UUID firstId = payerId.compareTo(payeeId) < 0 ? payerId : payeeId;
+        UUID secondId = firstId.equals(payerId) ? payeeId : payerId;
 
-        when(walletRepository.save(any()))
-                .thenAnswer(inv -> inv.getArgument(0));
-        when(entryRepository.save(any()))
-                .thenAnswer(inv -> inv.getArgument(0));
+        when(walletRepository.findByUserIdWithLock(firstId))
+                .thenReturn(Optional.of(firstId.equals(payerId) ? payer : payee));
+        when(walletRepository.findByUserIdWithLock(secondId))
+                .thenReturn(Optional.of(secondId.equals(payerId) ? payer : payee));
+
+        when(walletRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(entryRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         var command = new SettlePaymentCommand(
                 paymentId, payerId, payeeId, new BigDecimal("100.00"));
@@ -176,7 +192,11 @@ class WalletApplicationServiceTest {
         walletService.settle(command);
 
         assertThat(payer.getBalance()).isEqualByComparingTo("400.00");
+        assertThat(payer.getReservedBalance()).isEqualByComparingTo("0.00");
+        assertThat(payer.getAvailableBalance()).isEqualByComparingTo("400.00");
+
         assertThat(payee.getBalance()).isEqualByComparingTo("150.00");
+        assertThat(payee.getReservedBalance()).isEqualByComparingTo("0.00");
 
         verify(walletRepository, times(2)).save(any());
         verify(entryRepository, times(2)).save(any());
@@ -185,27 +205,21 @@ class WalletApplicationServiceTest {
     @Test
     void settle_WhenPaymentAlreadySettled_SkipsDuplicateSettlement() {
         UUID paymentId = UUID.randomUUID();
-        UUID payerId = UUID.randomUUID();
-        UUID payeeId = UUID.randomUUID();
 
         var command = new SettlePaymentCommand(
                 paymentId,
-                payerId,
-                payeeId,
+                UUID.randomUUID(),
+                UUID.randomUUID(),
                 new BigDecimal("100.00")
         );
 
         when(entryRepository.existsByPaymentIdAndType(
-                paymentId, EntryType.SETTLEMENT))
-                .thenReturn(true);
-
+                paymentId, EntryType.SETTLEMENT)).thenReturn(true);
         when(entryRepository.existsByPaymentIdAndType(
-                paymentId, EntryType.CREDIT))
-                .thenReturn(true);
+                paymentId, EntryType.CREDIT)).thenReturn(true);
 
         walletService.settle(command);
 
-        // Existing settlement must not modify wallets or create new entries.
         verifyNoInteractions(walletRepository);
         verify(entryRepository, never()).save(any());
     }
@@ -213,23 +227,18 @@ class WalletApplicationServiceTest {
     @Test
     void settle_WhenOnlySettlementEntryExists_ThrowsIllegalStateException() {
         UUID paymentId = UUID.randomUUID();
-        UUID payerId = UUID.randomUUID();
-        UUID payeeId = UUID.randomUUID();
 
         var command = new SettlePaymentCommand(
                 paymentId,
-                payerId,
-                payeeId,
+                UUID.randomUUID(),
+                UUID.randomUUID(),
                 new BigDecimal("100.00")
         );
 
         when(entryRepository.existsByPaymentIdAndType(
-                paymentId, EntryType.SETTLEMENT))
-                .thenReturn(true);
-
+                paymentId, EntryType.SETTLEMENT)).thenReturn(true);
         when(entryRepository.existsByPaymentIdAndType(
-                paymentId, EntryType.CREDIT))
-                .thenReturn(false);
+                paymentId, EntryType.CREDIT)).thenReturn(false);
 
         assertThatThrownBy(() -> walletService.settle(command))
                 .isInstanceOf(IllegalStateException.class)
@@ -242,23 +251,18 @@ class WalletApplicationServiceTest {
     @Test
     void settle_WhenOnlyCreditEntryExists_ThrowsIllegalStateException() {
         UUID paymentId = UUID.randomUUID();
-        UUID payerId = UUID.randomUUID();
-        UUID payeeId = UUID.randomUUID();
 
         var command = new SettlePaymentCommand(
                 paymentId,
-                payerId,
-                payeeId,
+                UUID.randomUUID(),
+                UUID.randomUUID(),
                 new BigDecimal("100.00")
         );
 
         when(entryRepository.existsByPaymentIdAndType(
-                paymentId, EntryType.SETTLEMENT))
-                .thenReturn(false);
-
+                paymentId, EntryType.SETTLEMENT)).thenReturn(false);
         when(entryRepository.existsByPaymentIdAndType(
-                paymentId, EntryType.CREDIT))
-                .thenReturn(true);
+                paymentId, EntryType.CREDIT)).thenReturn(true);
 
         assertThatThrownBy(() -> walletService.settle(command))
                 .isInstanceOf(IllegalStateException.class)
@@ -338,5 +342,4 @@ class WalletApplicationServiceTest {
 
         verifyNoInteractions(walletRepository);
     }
-
 }

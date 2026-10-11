@@ -1,3 +1,4 @@
+
 package com.finflow.payment.application;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -7,12 +8,14 @@ import com.finflow.events.fraud.FraudAnalysisRequestedEvent;
 import com.finflow.events.payment.PaymentApprovedEvent;
 import com.finflow.events.payment.PaymentRejectedEvent;
 import com.finflow.payment.application.command.CreatePaymentCommand;
+import com.finflow.payment.domain.exception.IdempotencyKeyConflictException;
 import com.finflow.payment.domain.exception.InsufficientFundsException;
 import com.finflow.payment.domain.exception.PaymentNotFoundException;
 import com.finflow.payment.domain.outbox.OutboxEvent;
 import com.finflow.payment.domain.outbox.OutboxEventRepository;
 import com.finflow.payment.domain.payment.Payment;
 import com.finflow.payment.domain.payment.PaymentRepository;
+import com.finflow.payment.domain.payment.PaymentStatus;
 import com.finflow.payment.infrastructure.client.WalletServiceClient;
 import com.finflow.payment.infrastructure.metrics.PaymentMetrics;
 import org.slf4j.Logger;
@@ -27,7 +30,8 @@ import java.util.UUID;
 @Transactional
 public class PaymentApplicationService {
 
-    private static final Logger log = LoggerFactory.getLogger(PaymentApplicationService.class);
+    private static final Logger log =
+            LoggerFactory.getLogger(PaymentApplicationService.class);
 
     private final PaymentRepository paymentRepository;
     private final OutboxEventRepository outboxRepository;
@@ -49,8 +53,44 @@ public class PaymentApplicationService {
     }
 
     public Payment createPayment(CreatePaymentCommand command) {
-        return paymentRepository.findByIdempotencyKey(command.idempotencyKey())
-                .orElseGet(() -> processNewPayment(command));
+        // Serialize creation requests that use the same idempotency key.
+        // PostgreSQL releases this advisory lock when the transaction ends.
+        paymentRepository.lockByIdempotencyKey(command.idempotencyKey());
+
+        var existing = paymentRepository.findByIdempotencyKey(
+                command.idempotencyKey()
+        );
+
+        if (existing.isPresent()) {
+            return returnExistingOrThrow(existing.get(), command);
+        }
+
+        return processNewPayment(command);
+    }
+
+    private Payment returnExistingOrThrow(
+            Payment existing,
+            CreatePaymentCommand command) {
+
+        boolean sameRequest =
+                existing.getPayerId().equals(command.payerId())
+                        && existing.getPayeeId().equals(command.payeeId())
+                        && existing.getAmount().compareTo(command.amount()) == 0
+                        && existing.getCurrency().equals(command.currency());
+
+        if (!sameRequest) {
+            throw new IdempotencyKeyConflictException(
+                    command.idempotencyKey()
+            );
+        }
+
+        log.info(
+                "Returning existing payment {} for idempotency key {}",
+                existing.getId(),
+                command.idempotencyKey()
+        );
+
+        return existing;
     }
 
     @Transactional(readOnly = true)
@@ -60,8 +100,19 @@ public class PaymentApplicationService {
     }
 
     public void processFraudResult(FraudAnalysisCompletedEvent event) {
-        var payment = paymentRepository.findById(event.paymentId())
-                .orElseThrow(() -> new PaymentNotFoundException(event.paymentId()));
+        var payment = paymentRepository.findByIdForUpdate(event.paymentId())
+                .orElseThrow(
+                        () -> new PaymentNotFoundException(event.paymentId())
+                );
+
+        if (payment.getStatus() != PaymentStatus.PENDING_FRAUD_REVIEW) {
+            log.info(
+                    "Ignoring fraud result for paymentId={} because status={}",
+                    payment.getId(),
+                    payment.getStatus()
+            );
+            return;
+        }
 
         switch (event.decision()) {
             case APPROVED -> {
@@ -71,58 +122,152 @@ public class PaymentApplicationService {
                         payment.getPayeeId(),
                         payment.getAmount()
                 );
+
                 payment.approve();
                 paymentRepository.save(payment);
-                enqueue(payment.getId(), "payment.approved", "payment-approved",
-                        new PaymentApprovedEvent(UUID.randomUUID(), Instant.now(), payment.getId(), payment.getPayerId()));
+
+                enqueue(
+                        payment.getId(),
+                        "payment.approved",
+                        "payment-approved",
+                        new PaymentApprovedEvent(
+                                UUID.randomUUID(),
+                                Instant.now(),
+                                payment.getId(),
+                                payment.getPayerId()
+                        )
+                );
+
                 metrics.recordApproved();
-                log.info("paymentId={} status=APPROVED", payment.getId());
+
+                log.info(
+                        "paymentId={} status=APPROVED",
+                        payment.getId()
+                );
             }
+
             case REJECTED -> {
-                walletClient.release(payment.getId(), payment.getPayerId(), payment.getAmount());
+                walletClient.release(
+                        payment.getId(),
+                        payment.getPayerId(),
+                        payment.getAmount()
+                );
+
                 payment.reject(event.reason());
                 paymentRepository.save(payment);
-                enqueue(payment.getId(), "payment.rejected", "payment-rejected",
-                        new PaymentRejectedEvent(UUID.randomUUID(), Instant.now(), payment.getId(), event.reason()));
+
+                enqueue(
+                        payment.getId(),
+                        "payment.rejected",
+                        "payment-rejected",
+                        new PaymentRejectedEvent(
+                                UUID.randomUUID(),
+                                Instant.now(),
+                                payment.getId(),
+                                event.reason()
+                        )
+                );
+
                 metrics.recordRejected("fraud");
-                log.info("paymentId={} status=REJECTED reason={}", payment.getId(), event.reason());
+
+                log.info(
+                        "paymentId={} status=REJECTED reason={}",
+                        payment.getId(),
+                        event.reason()
+                );
             }
         }
     }
 
     private Payment processNewPayment(CreatePaymentCommand command) {
         var payment = Payment.create(
-                command.payerId(), command.payeeId(),
-                command.amount(), command.currency(),
-                command.idempotencyKey());
+                command.payerId(),
+                command.payeeId(),
+                command.amount(),
+                command.currency(),
+                command.idempotencyKey()
+        );
+
         paymentRepository.save(payment);
         metrics.recordCreated();
 
         try {
-            walletClient.reserve(payment.getId(), payment.getPayerId(), payment.getAmount(), payment.getCurrency());
+            walletClient.reserve(
+                    payment.getId(),
+                    payment.getPayerId(),
+                    payment.getAmount(),
+                    payment.getCurrency()
+            );
+
             payment.markPendingFraudReview();
             paymentRepository.save(payment);
-            enqueue(payment.getId(), "fraud.analysis.requested", "fraud-analysis-requested",
-                    new FraudAnalysisRequestedEvent(UUID.randomUUID(), Instant.now(),
-                            payment.getId(), payment.getPayerId(), payment.getAmount(), payment.getCurrency()));
-            log.info("paymentId={} status=PENDING_FRAUD_REVIEW outbox queued", payment.getId());
+
+            enqueue(
+                    payment.getId(),
+                    "fraud.analysis.requested",
+                    "fraud-analysis-requested",
+                    new FraudAnalysisRequestedEvent(
+                            UUID.randomUUID(),
+                            Instant.now(),
+                            payment.getId(),
+                            payment.getPayerId(),
+                            payment.getAmount(),
+                            payment.getCurrency()
+                    )
+            );
+
+            log.info(
+                    "paymentId={} status=PENDING_FRAUD_REVIEW outbox queued",
+                    payment.getId()
+            );
+
         } catch (InsufficientFundsException e) {
             payment.reject("Insufficient funds");
             paymentRepository.save(payment);
-            enqueue(payment.getId(), "payment.rejected", "payment-rejected",
-                    new PaymentRejectedEvent(UUID.randomUUID(), Instant.now(), payment.getId(), "Insufficient funds"));
+
+            enqueue(
+                    payment.getId(),
+                    "payment.rejected",
+                    "payment-rejected",
+                    new PaymentRejectedEvent(
+                            UUID.randomUUID(),
+                            Instant.now(),
+                            payment.getId(),
+                            "Insufficient funds"
+                    )
+            );
+
             metrics.recordRejected("insufficient_funds");
-            log.info("paymentId={} status=REJECTED reason=insufficient_funds", payment.getId());
+
+            log.info(
+                    "paymentId={} status=REJECTED reason=insufficient_funds",
+                    payment.getId()
+            );
         }
 
         return payment;
     }
 
-    private void enqueue(UUID aggregateId, String eventType, String topic, Object event) {
+    private void enqueue(
+            UUID aggregateId,
+            String eventType,
+            String topic,
+            Object event) {
+
         try {
-            outboxRepository.save(OutboxEvent.of(aggregateId, eventType, topic, objectMapper.writeValueAsString(event)));
+            outboxRepository.save(
+                    OutboxEvent.of(
+                            aggregateId,
+                            eventType,
+                            topic,
+                            objectMapper.writeValueAsString(event)
+                    )
+            );
         } catch (JsonProcessingException e) {
-            throw new IllegalStateException("Failed to serialize outbox event", e);
+            throw new IllegalStateException(
+                    "Failed to serialize outbox event",
+                    e
+            );
         }
     }
 }

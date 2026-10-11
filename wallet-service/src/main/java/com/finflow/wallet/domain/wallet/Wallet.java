@@ -1,3 +1,4 @@
+
 package com.finflow.wallet.domain.wallet;
 
 import com.finflow.wallet.domain.exception.InsufficientFundsException;
@@ -35,9 +36,28 @@ public class Wallet {
     @Column(nullable = false)
     private Instant updatedAt;
 
-    protected Wallet() {}
+    protected Wallet() {
+    }
 
-    public static Wallet create(UUID userId, BigDecimal initialBalance, String currency) {
+    public static Wallet create(
+            UUID userId,
+            BigDecimal initialBalance,
+            String currency) {
+
+        if (userId == null) {
+            throw new IllegalArgumentException("User ID must not be null");
+        }
+
+        if (initialBalance == null || initialBalance.signum() < 0) {
+            throw new IllegalArgumentException(
+                    "Initial balance must be non-negative");
+        }
+
+        if (currency == null || currency.isBlank()) {
+            throw new IllegalArgumentException(
+                    "Currency must not be blank");
+        }
+
         var wallet = new Wallet();
         wallet.id = UUID.randomUUID();
         wallet.userId = userId;
@@ -46,18 +66,41 @@ public class Wallet {
         wallet.currency = currency;
         wallet.createdAt = Instant.now();
         wallet.updatedAt = Instant.now();
+
         return wallet;
     }
 
     public void reserve(BigDecimal amount) {
-        if (getAvailableBalance().compareTo(amount) < 0) {
-            throw new InsufficientFundsException(getAvailableBalance(), amount);
+        if (amount == null || amount.signum() <= 0) {
+            throw new IllegalArgumentException(
+                    "Reservation amount must be positive");
         }
+
+        if (getAvailableBalance().compareTo(amount) < 0) {
+            throw new InsufficientFundsException(
+                    getAvailableBalance(), amount);
+        }
+
         this.reservedBalance = this.reservedBalance.add(amount);
         this.updatedAt = Instant.now();
     }
 
     public void settle(BigDecimal amount) {
+        if (amount == null || amount.signum() <= 0) {
+            throw new IllegalArgumentException(
+                    "Settlement amount must be positive");
+        }
+
+        if (reservedBalance.compareTo(amount) < 0) {
+            throw new IllegalArgumentException(
+                    "Settlement amount exceeds reserved balance");
+        }
+
+        if (balance.compareTo(amount) < 0) {
+            throw new IllegalArgumentException(
+                    "Settlement amount exceeds wallet balance");
+        }
+
         this.balance = this.balance.subtract(amount);
         this.reservedBalance = this.reservedBalance.subtract(amount);
         this.updatedAt = Instant.now();
@@ -65,7 +108,8 @@ public class Wallet {
 
     public void credit(BigDecimal amount) {
         if (amount == null || amount.signum() <= 0) {
-            throw new IllegalArgumentException("Credit amount must be positive");
+            throw new IllegalArgumentException(
+                    "Credit amount must be positive");
         }
 
         this.balance = this.balance.add(amount);
@@ -73,21 +117,49 @@ public class Wallet {
     }
 
     public void release(BigDecimal amount) {
+        if (amount == null || amount.signum() <= 0) {
+            throw new IllegalArgumentException(
+                    "Release amount must be positive");
+        }
+
+        if (reservedBalance.compareTo(amount) < 0) {
+            throw new IllegalArgumentException(
+                    "Release amount exceeds reserved balance");
+        }
+
         this.reservedBalance = this.reservedBalance.subtract(amount);
         this.updatedAt = Instant.now();
     }
-
-
 
     public BigDecimal getAvailableBalance() {
         return balance.subtract(reservedBalance);
     }
 
-    public UUID getId() { return id; }
-    public UUID getUserId() { return userId; }
-    public BigDecimal getBalance() { return balance; }
-    public BigDecimal getReservedBalance() { return reservedBalance; }
-    public String getCurrency() { return currency; }
-    public Instant getCreatedAt() { return createdAt; }
-    public Instant getUpdatedAt() { return updatedAt; }
+    public UUID getId() {
+        return id;
+    }
+
+    public UUID getUserId() {
+        return userId;
+    }
+
+    public BigDecimal getBalance() {
+        return balance;
+    }
+
+    public BigDecimal getReservedBalance() {
+        return reservedBalance;
+    }
+
+    public String getCurrency() {
+        return currency;
+    }
+
+    public Instant getCreatedAt() {
+        return createdAt;
+    }
+
+    public Instant getUpdatedAt() {
+        return updatedAt;
+    }
 }
