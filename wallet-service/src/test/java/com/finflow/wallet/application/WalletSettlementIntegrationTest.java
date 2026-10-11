@@ -15,6 +15,11 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.math.BigDecimal;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -105,6 +110,123 @@ class WalletSettlementIntegrationTest {
         assertThat(payeeBalance).isEqualByComparingTo("50.00");
         assertThat(entryCount).isZero();
     }
+
+
+    @Test
+    void settle_WhenCalledConcurrentlyForSamePayment_TransfersMoneyOnlyOnce()
+            throws Exception {
+
+        UUID payerId = UUID.randomUUID();
+        UUID payeeId = UUID.randomUUID();
+        UUID paymentId = UUID.randomUUID();
+
+        UUID payerWalletId = UUID.randomUUID();
+        UUID payeeWalletId = UUID.randomUUID();
+
+        insertWallet(payerWalletId, payerId, "500.00");
+        jdbcTemplate.update(
+                "UPDATE wallet.wallets SET reserved_balance = ? WHERE id = ?",
+                new BigDecimal("100.00"),
+                payerWalletId
+        );
+        insertWallet(payeeWalletId, payeeId, "50.00");
+
+        SettlePaymentCommand command = new SettlePaymentCommand(
+                paymentId,
+                payerId,
+                payeeId,
+                new BigDecimal("100.00")
+        );
+
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch start = new CountDownLatch(1);
+
+        try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+
+            Future<Throwable> first = executor.submit(() -> {
+                ready.countDown();
+                try {
+                    if (!start.await(10, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("Timed out waiting to start");
+                    }
+
+                    walletService.settle(command);
+                    return null;
+                } catch (Throwable error) {
+                    return error;
+                }
+            });
+
+            Future<Throwable> second = executor.submit(() -> {
+                ready.countDown();
+                try {
+                    if (!start.await(10, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("Timed out waiting to start");
+                    }
+
+                    walletService.settle(command);
+                    return null;
+                } catch (Throwable error) {
+                    return error;
+                }
+            });
+
+            assertThat(ready.await(10, TimeUnit.SECONDS))
+                    .as("Both requests should be ready")
+                    .isTrue();
+
+            start.countDown();
+
+            Throwable firstError = first.get(30, TimeUnit.SECONDS);
+            Throwable secondError = second.get(30, TimeUnit.SECONDS);
+
+            BigDecimal payerBalance = jdbcTemplate.queryForObject(
+                    "SELECT balance FROM wallet.wallets WHERE id = ?",
+                    BigDecimal.class,
+                    payerWalletId
+            );
+
+            BigDecimal payeeBalance = jdbcTemplate.queryForObject(
+                    "SELECT balance FROM wallet.wallets WHERE id = ?",
+                    BigDecimal.class,
+                    payeeWalletId
+            );
+
+            Integer settlementCount = jdbcTemplate.queryForObject(
+                    """
+                    SELECT COUNT(*) FROM wallet.wallet_entries
+                    WHERE payment_id = ? AND type = 'SETTLEMENT'
+                    """,
+                    Integer.class,
+                    paymentId
+            );
+
+            Integer creditCount = jdbcTemplate.queryForObject(
+                    """
+                    SELECT COUNT(*) FROM wallet.wallet_entries
+                    WHERE payment_id = ? AND type = 'CREDIT'
+                    """,
+                    Integer.class,
+                    paymentId
+            );
+
+            // The transfer must happen exactly once.
+            assertThat(payerBalance).isEqualByComparingTo("400.00");
+            assertThat(payeeBalance).isEqualByComparingTo("150.00");
+            assertThat(settlementCount).isEqualTo(1);
+            assertThat(creditCount).isEqualTo(1);
+
+            // Both duplicate requests should be handled without an error.
+            assertThat(firstError)
+                    .as("First concurrent settlement should succeed")
+                    .isNull();
+
+            assertThat(secondError)
+                    .as("Second concurrent settlement should be idempotent")
+                    .isNull();
+        }
+    }
+
 
     private void insertWallet(UUID walletId, UUID userId, String balance) {
         jdbcTemplate.update("""
