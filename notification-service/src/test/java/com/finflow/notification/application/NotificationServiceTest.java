@@ -14,6 +14,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -50,5 +51,15 @@ class NotificationServiceTest {
         var captor = ArgumentCaptor.forClass(NotificationLog.class);
         verify(repository).save(captor.capture());
         assertThat(captor.getValue().getType()).isEqualTo(NotificationType.PAYMENT_REJECTED);
+    }
+
+    @Test
+    void notifyPaymentApproved_WhenAlreadySent_SkipsDuplicateDelivery() {
+        when(repository.existsByPaymentIdAndType(paymentId, NotificationType.PAYMENT_APPROVED))
+                .thenReturn(true);
+
+        notificationService.notifyPaymentApproved(recipientId, paymentId);
+
+        verify(repository, never()).save(any());
     }
 }

@@ -12,7 +12,7 @@ dependencyManagement {
 
 dependencies {
     implementation(libs.spring.cloud.gateway)
-    implementation(libs.spring.boot.starter.data.redis)
+    implementation(libs.spring.boot.starter.data.redis.reactive)
     implementation(libs.spring.boot.starter.actuator)
     implementation(libs.jjwt.api)
     implementation(libs.micrometer.prometheus)

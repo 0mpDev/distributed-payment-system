@@ -55,7 +55,9 @@ public class KafkaConfig {
 
     @Bean
     public ConcurrentKafkaListenerContainerFactory<String, FraudAnalysisCompletedEvent> fraudAnalysisListenerFactory(
-            KafkaTemplate<String, Object> kafkaTemplate) {
+            KafkaTemplate<String, Object> kafkaTemplate,
+            // Topics have 6 partitions; 1 thread = all partitions processed sequentially.
+            @Value("${app.kafka.concurrency:1}") int concurrency) {
 
         var recoverer = new DeadLetterPublishingRecoverer(kafkaTemplate,
                 (record, ex) -> new TopicPartition("fraud-analysis-completed.DLQ", 0));
@@ -67,6 +69,7 @@ public class KafkaConfig {
         var factory = new ConcurrentKafkaListenerContainerFactory<String, FraudAnalysisCompletedEvent>();
         factory.setConsumerFactory(fraudAnalysisConsumerFactory());
         factory.setCommonErrorHandler(errorHandler);
+        factory.setConcurrency(concurrency);
         return factory;
     }
 }

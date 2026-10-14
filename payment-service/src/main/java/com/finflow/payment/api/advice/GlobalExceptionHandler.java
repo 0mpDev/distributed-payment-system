@@ -1,5 +1,6 @@
 package com.finflow.payment.api.advice;
 
+import com.finflow.payment.domain.exception.IdempotencyKeyConflictException;
 import com.finflow.payment.domain.exception.InsufficientFundsException;
 import com.finflow.payment.domain.exception.PaymentNotFoundException;
 import org.slf4j.Logger;
@@ -20,6 +21,11 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(PaymentNotFoundException.class)
     public ProblemDetail handleNotFound(PaymentNotFoundException ex) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, ex.getMessage());
+    }
+
+    @ExceptionHandler(IdempotencyKeyConflictException.class)
+    public ProblemDetail handleIdempotencyConflict(IdempotencyKeyConflictException ex) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, ex.getMessage());
     }
 
     @ExceptionHandler(InsufficientFundsException.class)

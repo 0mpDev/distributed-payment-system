@@ -132,12 +132,16 @@ Partition key: `paymentId` — guarantees ordering for all events belonging to t
 ## Quick Start
 
 ### Prerequisites
-- Docker 24+, Docker Compose v2
+- JDK 21, Docker 24+, Docker Compose v2
 
 ```bash
-# Clone and start infrastructure + all services
+# Build the service jars (the Dockerfiles package the pre-built jars)
+./gradlew bootJar
+
+# Start infrastructure + all services
 cd infra/docker
-docker compose up -d
+docker compose up -d --build
+# after code changes: ./gradlew bootJar, then docker compose up -d --build --force-recreate
 
 # Start observability stack (Prometheus, Grafana, Zipkin)
 docker compose -f docker-compose.monitoring.yml up -d
@@ -253,7 +257,7 @@ distributed-payment-platform/
 
 **Eventual consistency:** Payment status is PENDING_FRAUD_REVIEW for ~1s after creation. The system is eventually consistent — GET /payments/{id} may return PENDING briefly before the fraud pipeline completes.
 
-**Synchronous wallet calls:** wallet-service is called synchronously from payment-service for balance reservation. This keeps the "available balance" response instant and avoids the complexity of async balance queries. The trade-off is: if wallet-service is down, payments fail immediately rather than queuing.
+**Synchronous wallet calls, with forward recovery:** wallet-service is called synchronously from payment-service to reserve balance, but outside any DB transaction, because that call commits in another service's database and cannot be rolled back with ours. The payment is recorded as PENDING first; if wallet-service is down or payment-service crashes mid-flow, the payment stays PENDING and a recovery job re-drives it (wallet reservations are idempotent per paymentId), so funds are never reserved without a payment record. The trade-off: during a wallet outage payments are accepted as PENDING and completed later instead of failing fast.
 
 **Single PostgreSQL instance, multiple schemas:** For a portfolio project, schema isolation (not DB isolation) is used. In production with higher scale, each service would have a dedicated PostgreSQL cluster with connection pooling (PgBouncer).
 
@@ -305,3 +309,10 @@ GitHub Actions runs on every push:
 ## Status
 
 ✅ All 7 phases complete. Production-ready local stack with full observability and Kubernetes manifests.
+
+---
+
+## Verification
+
+Concurrency, failure-recovery and load-test results (with hardware and reproduction steps) are in
+[docs/VERIFICATION.md](docs/VERIFICATION.md); the test code is in [loadtest/](loadtest).

@@ -28,3 +28,7 @@ logs/
 
 # OS
 Thumbs.db
+
+bin/
+*.bak
+paystream-fixes*.patch

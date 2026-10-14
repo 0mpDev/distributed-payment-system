@@ -80,6 +80,9 @@ services:
       kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic notification-requested       --partitions 3 --replication-factor 1
       kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic payment-created.DLQ          --partitions 1 --replication-factor 1
       kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic fraud-analysis-requested.DLQ --partitions 1 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic fraud-analysis-completed.DLQ --partitions 1 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic payment-approved.DLQ --partitions 1 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic payment-rejected.DLQ --partitions 1 --replication-factor 1
       echo 'Topics created.'
       "
 
@@ -106,6 +109,8 @@ services:
       PAYMENT_SERVICE_URL: http://payment-service:8082
       WALLET_SERVICE_URL: http://wallet-service:8083
       REDIS_HOST: redis
+      RATE_LIMIT_REPLENISH: ${RATE_LIMIT_REPLENISH:-50}
+      RATE_LIMIT_BURST: ${RATE_LIMIT_BURST:-100}
       JWT_SECRET: ${JWT_SECRET:-finflow-super-secret-key-change-in-production-32chars}
     depends_on:
       redis:
@@ -140,6 +145,7 @@ services:
       DB_PASSWORD: finflow
       WALLET_SERVICE_URL: http://wallet-service:8083
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      APP_KAFKA_CONCURRENCY: ${APP_KAFKA_CONCURRENCY:-6}
     depends_on:
       postgres:
         condition: service_healthy
@@ -173,6 +179,7 @@ services:
       DB_USERNAME: finflow
       DB_PASSWORD: finflow
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      APP_KAFKA_CONCURRENCY: ${APP_KAFKA_CONCURRENCY:-6}
     depends_on:
       postgres:
         condition: service_healthy

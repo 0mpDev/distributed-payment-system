@@ -23,12 +23,21 @@ public class NotificationService {
     }
 
     public void notifyPaymentApproved(UUID recipientId, UUID paymentId) {
-        log.info("channel=EMAIL type=PAYMENT_APPROVED recipientId={} paymentId={}", recipientId, paymentId);
-        repository.save(NotificationLog.of(recipientId, paymentId, NotificationType.PAYMENT_APPROVED));
+        notifyOnce(recipientId, paymentId, NotificationType.PAYMENT_APPROVED);
     }
 
     public void notifyPaymentRejected(UUID recipientId, UUID paymentId) {
-        log.info("channel=EMAIL type=PAYMENT_REJECTED recipientId={} paymentId={}", recipientId, paymentId);
-        repository.save(NotificationLog.of(recipientId, paymentId, NotificationType.PAYMENT_REJECTED));
+        notifyOnce(recipientId, paymentId, NotificationType.PAYMENT_REJECTED);
+    }
+
+    // Kafka is at-least-once, so the same event can be redelivered. The unique index on
+    // (payment_id, type) is the real guarantee; this check just avoids the noisy exception on the common path.
+    private void notifyOnce(UUID recipientId, UUID paymentId, NotificationType type) {
+        if (repository.existsByPaymentIdAndType(paymentId, type)) {
+            log.warn("type={} paymentId={} already sent - skipping duplicate delivery", type, paymentId);
+            return;
+        }
+        log.info("channel=EMAIL type={} recipientId={} paymentId={}", type, recipientId, paymentId);
+        repository.save(NotificationLog.of(recipientId, paymentId, type));
     }
 }

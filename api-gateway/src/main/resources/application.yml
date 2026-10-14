@@ -3,6 +3,16 @@ spring:
     name: api-gateway
   cloud:
     gateway:
+      # Redis-backed token bucket (Spring Cloud Gateway RedisRateLimiter, atomic Lua script).
+      # replenishRate = steady-state requests/second, burstCapacity = max burst. Per user (or per IP on /api/auth/**).
+      # Fails open if Redis is unreachable, so Redis is not a hard dependency for traffic.
+      default-filters:
+        - name: RequestRateLimiter
+          args:
+            key-resolver: "#{@clientKeyResolver}"
+            redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH:50}
+            redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST:100}
+            redis-rate-limiter.requestedTokens: 1
       routes:
         - id: auth-service
           uri: ${AUTH_SERVICE_URL:http://localhost:8081}
