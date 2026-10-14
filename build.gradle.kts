@@ -14,6 +14,7 @@ allprojects {
 
 subprojects {
     apply(plugin = "java")
+    apply(plugin = "jacoco")
 
     configure<JavaPluginExtension> {
         toolchain {
@@ -25,5 +26,13 @@ subprojects {
         useJUnitPlatform()
         jvmArgs("-XX:+EnableDynamicAgentLoading")
         environment("TESTCONTAINERS_RYUK_DISABLED", "true")
+        finalizedBy("jacocoTestReport")
+    }
+
+    tasks.withType<org.gradle.testing.jacoco.tasks.JacocoReport> {
+        reports {
+            xml.required.set(true)   // read by coverage_summary.py and CI
+            html.required.set(true)  // build/reports/jacoco/test/html/index.html
+        }
     }
 }

@@ -3,10 +3,14 @@ package com.finflow.payment.infrastructure.persistence;
 
 import com.finflow.payment.domain.payment.Payment;
 import com.finflow.payment.domain.payment.PaymentRepository;
+import com.finflow.payment.domain.payment.PaymentStatus;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Repository;
 
+import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -45,6 +49,12 @@ class PaymentRepositoryAdapter implements PaymentRepository {
                 )
                 .setParameter("idempotencyKey", idempotencyKey)
                 .getSingleResult();
+    }
+
+    @Override
+    public List<Payment> findStalePending(Instant olderThan, int limit) {
+        return delegate.findByStatusAndCreatedAtBeforeOrderByCreatedAtAsc(
+                PaymentStatus.PENDING, olderThan, PageRequest.ofSize(limit));
     }
 
     @Override
